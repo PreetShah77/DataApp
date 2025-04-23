@@ -59,6 +59,40 @@ def extract_json_from_response(raw_response):
 def normalize_column_name(col_name):
     return col_name.lower().replace(" ", "_")
 
+# Function to normalize an operation's column names
+def normalize_operation_columns(operation):
+    if "column" in operation:
+        operation["column"] = normalize_column_name(operation["column"])
+    if "x_axis" in operation:
+        operation["x_axis"] = normalize_column_name(operation["x_axis"])
+    if "y_axis" in operation:
+        operation["y_axis"] = normalize_column_name(operation["y_axis"])
+    if "aggregate_column" in operation:
+        operation["aggregate_column"] = normalize_column_name(operation["aggregate_column"])
+    if "group_by" in operation:
+        operation["group_by"] = normalize_column_name(operation["group_by"])
+    if "field" in operation:
+        operation["field"] = normalize_column_name(operation["field"])
+    if "columns" in operation:
+        for col in operation["columns"]:
+            col["original_name"] = normalize_column_name(col["original_name"])
+            col["new_name"] = normalize_column_name(col["new_name"])
+    if "x_column" in operation:
+        operation["x_column"] = normalize_column_name(operation["x_column"])
+    if "y_column" in operation:
+        operation["y_column"] = normalize_column_name(operation["y_column"])
+    return operation
+
+# Helper function to get session-specific directory
+def get_session_upload_dir():
+    if 'session_id' not in session:
+        session['session_id'] = str(os.urandom(16).hex())  # Unique ID for the session
+    session_id = session['session_id']
+    session_dir = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
+    if not os.path.exists(session_dir):
+        os.makedirs(session_dir)
+    return session_dir
+
 # Function to interpret NLP prompts using LLaMA
 def interpret_prompt(prompt, df_columns):
     try:
@@ -129,11 +163,12 @@ def interpret_prompt(prompt, df_columns):
                 print(f"Extracted JSON string: {json_str}, type: {type(json_str)}")
                 parsed_json = json.loads(json_str)
                 # Validate columns using normalized names
+                normalized_df_columns = [normalize_column_name(col) for col in df_columns]
                 if "column" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["column"])
                     if normalized_col not in normalized_df_columns:
                         return {"error": f"Column '{parsed_json['column']}' not found. Available columns: {df_columns}"}
-                    parsed_json["column"] = normalized_col  # Use normalized name
+                    parsed_json["column"] = normalized_col
                 if "x_axis" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["x_axis"])
                     if normalized_col not in normalized_df_columns:
@@ -186,11 +221,12 @@ def interpret_prompt(prompt, df_columns):
 # Function to execute data operations
 def execute_operation(operation, df):
     try:
-        # Save updated CSV after modifications
+        # Save updated CSV after modifications in session-specific directory
         def save_updated_csv(df):
-            output_file = "output.csv"
-            df.to_csv(os.path.join(app.config['UPLOAD_FOLDER'], output_file), index=False)
-            return {"csv_file": output_file}
+            session_dir = get_session_upload_dir()
+            output_file = os.path.join(session_dir, "output.csv")
+            df.to_csv(output_file, index=False)
+            return {"csv_file": "output.csv"}
 
         if operation["operation"] == "clean":
             if operation["type"] == "drop_nulls":
@@ -204,13 +240,20 @@ def execute_operation(operation, df):
                     df[operation["column"]] = pd.to_datetime(df[operation["column"]]).dt.strftime("%Y-%m-%d")
                     return df, f"Standardized date format in {operation['column']}.", save_updated_csv(df)
             elif operation["type"] == "remove_column":
+                if operation["column"] not in df.columns:
+                    return df, f"Column '{operation['column']}' not found in DataFrame.", None
                 df = df.drop(columns=[operation["column"]])
                 return df, f"Removed column {operation['column']}.", save_updated_csv(df)
             elif operation["type"] == "fill_null":
+                if operation["column"] not in df.columns:
+                    return df, f"Column '{operation['column']}' not found in DataFrame.", None
                 df[operation["column"]] = df[operation["column"]].fillna(operation["value"])
                 return df, f"Filled nulls in {operation['column']} with {operation['value']}.", save_updated_csv(df)
             elif operation["type"] == "rename_columns":
                 rename_dict = {col["original_name"]: col["new_name"] for col in operation["columns"]}
+                missing_cols = [col for col in rename_dict.keys() if col not in df.columns]
+                if missing_cols:
+                    return df, f"Columns {missing_cols} not found in DataFrame.", None
                 df = df.rename(columns=rename_dict)
                 return df, f"Renamed columns: {list(rename_dict.values())}.", save_updated_csv(df)
 
@@ -220,6 +263,9 @@ def execute_operation(operation, df):
                 df = df.query(condition)
                 return df, f"Filtered data where {condition}.", save_updated_csv(df)
             elif operation["type"] == "group":
+                if operation["column"] not in df.columns or operation["aggregate_column"] not in df.columns:
+                    missing_cols = [col for col in [operation["column"], operation["aggregate_column"]] if col not in df.columns]
+                    return df, f"Columns {missing_cols} not found in DataFrame.", None
                 result = (df.groupby(operation["column"])[operation["aggregate_column"]]
                           .agg(operation["aggregate"]).reset_index())
                 return result, f"Grouped by {operation['column']} and aggregated {operation['aggregate_column']} with {operation['aggregate']}.", save_updated_csv(result)
@@ -241,7 +287,11 @@ def execute_operation(operation, df):
                             return df, f"Error applying transformation: {str(e)}. Ensure valid pandas string methods.", None
                     else:
                         return df, f"Invalid expression '{expr}'. Use pandas string methods (e.g., str.replace, str[-n:]) prefixed with column name. Try a different prompt.", None
+                return df, f"Column '{operation['field']}' not found in DataFrame.", None
             elif operation["type"] == "find_max":
+                if operation["group_by"] not in df.columns or operation["aggregate_column"] not in df.columns:
+                    missing_cols = [col for col in [operation["group_by"], operation["aggregate_column"]] if col not in df.columns]
+                    return df, f"Columns {missing_cols} not found in DataFrame.", None
                 result = (df.groupby(operation["group_by"])[operation["aggregate_column"]]
                           .agg(operation["aggregate"]).reset_index()
                           .sort_values(by=operation["aggregate_column"], ascending=False))
@@ -292,12 +342,17 @@ def execute_operation(operation, df):
                 y_col = operation["y_column"]
                 group_by = operation["group_by"]
                 aggregate = operation.get("aggregate", "sum")
-                # Filter out rows where group_by or y_col is null
-                df_filtered = df.dropna(subset=[group_by, y_col])
+                # Check if required columns exist
+                required_cols = [group_by, y_col]
+                missing_cols = [col for col in required_cols if col not in df.columns]
+                if missing_cols:
+                    return df, f"Columns {missing_cols} not found in DataFrame.", None
+                # Filter out rows where group_by or y_col is null, making a copy to avoid SettingWithCopyWarning
+                df_filtered = df.dropna(subset=[group_by, y_col]).copy()
                 if df_filtered.empty:
                     return df, f"No valid data to plot after removing nulls in {group_by} and {y_col}.", None
-                # Ensure y_col is numeric
-                df_filtered[y_col] = pd.to_numeric(df_filtered[y_col], errors='coerce')
+                # Ensure y_col is numeric using .loc to avoid SettingWithCopyWarning
+                df_filtered.loc[:, y_col] = pd.to_numeric(df_filtered[y_col], errors='coerce')
                 df_filtered = df_filtered.dropna(subset=[y_col])
                 if df_filtered.empty:
                     return df, f"No numeric data in {y_col} to plot.", None
@@ -311,28 +366,35 @@ def execute_operation(operation, df):
                 plt.figure(figsize=(8, 6))
                 chart_type = operation["chart_type"].lower()
                 chart_filename = f"{chart_type}_chart.png"
-                chart_path = os.path.join(app.config['UPLOAD_FOLDER'], chart_filename)
+                session_dir = get_session_upload_dir()
+                chart_path = os.path.join(session_dir, chart_filename)
 
-                if chart_type == "donut":
-                    plt.pie(grouped_df[y_col], labels=grouped_df[x_col], autopct='%1.1f%%')
-                    centre_circle = plt.Circle((0, 0), 0.70, fc='white')
-                    fig = plt.gcf()
-                    fig.gca().add_artist(centre_circle)
-                elif chart_type == "bar":
-                    plt.bar(grouped_df[x_col], grouped_df[y_col])
-                    plt.xticks(rotation=45, ha='right')
-                elif chart_type == "pie":
-                    plt.pie(grouped_df[y_col], labels=grouped_df[x_col], autopct='%1.1f%%')
-                elif chart_type == "line":
-                    plt.plot(grouped_df[x_col], grouped_df[y_col], marker='o')
-                else:
-                    return df, f"Unsupported chart type: {chart_type}. Supported types: donut, bar, pie, line.", None
+                try:
+                    if chart_type == "donut":
+                        plt.pie(grouped_df[y_col], labels=grouped_df[x_col], autopct='%1.1f%%')
+                        centre_circle = plt.Circle((0, 0), 0.70, fc='white')
+                        fig = plt.gcf()
+                        fig.gca().add_artist(centre_circle)
+                    elif chart_type == "bar":
+                        plt.bar(grouped_df[x_col], grouped_df[y_col])
+                        plt.xticks(rotation=45, ha='right')
+                    elif chart_type == "pie":
+                        plt.pie(grouped_df[y_col], labels=grouped_df[x_col], autopct='%1.1f%%')
+                    elif chart_type == "line":
+                        plt.plot(grouped_df[x_col], grouped_df[y_col], marker='o')
+                    else:
+                        return df, f"Unsupported chart type: {chart_type}. Supported types: donut, bar, pie, line.", None
 
-                plt.title(f"{y_col} by {x_col}")
-                plt.tight_layout()
-                print(f"Attempting to save chart to: {chart_path}")
-                plt.savefig(chart_path, bbox_inches='tight')
-                plt.close()
+                    plt.title(f"{y_col} by {x_col}")
+                    plt.tight_layout()
+                    print(f"Attempting to save chart to: {chart_path}")
+                    plt.savefig(chart_path, bbox_inches='tight')
+                    plt.close()
+                except Exception as e:
+                    plt.close()
+                    print(f"Chart generation error: {str(e)}")
+                    return df, f"Failed to generate chart: {str(e)}.", None
+
                 if not os.path.exists(chart_path):
                     print(f"Chart file not found at {chart_path} after saving.")
                     return df, "Failed to save chart image.", None
@@ -351,9 +413,7 @@ def execute_operation(operation, df):
 
         elif operation["operation"] == "export":
             if operation["type"] == "csv":
-                output_file = "output.csv"
-                df.to_csv(os.path.join(app.config['UPLOAD_FOLDER'], output_file), index=False)
-                return df, "Exported as CSV.", {"csv_file": output_file}
+                return df, "Exported as CSV.", save_updated_csv(df)
 
         return df, "Operation not supported. Try: Remove X column, Describe columns.", None
     except Exception as e:
@@ -382,7 +442,8 @@ def index():
             file = request.files["file"]
             if file and file.filename.endswith((".csv", ".xlsx")):
                 filename = secure_filename(file.filename)
-                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                session_dir = get_session_upload_dir()
+                file_path = os.path.join(session_dir, filename)
                 file.save(file_path)
                 try:
                     if filename.endswith(".csv"):
@@ -408,6 +469,7 @@ def index():
                     message += f" Columns: {list(df.columns)}"
                     session['df'] = df.to_json()
                     session['filename'] = filename
+                    # Clear operations to start fresh with new data
                     session['operations'] = []
                     session['chat_history'].append({"role": "bot", "content": message})
                 except Exception as e:
@@ -430,8 +492,11 @@ def index():
                 if "error" in operation:
                     message = operation["error"]
                 else:
-                    # Apply all prior operations first
+                    # Normalize the current operation's columns
+                    operation = normalize_operation_columns(operation)
+                    # Apply all prior operations, ensuring they are normalized
                     for op in session['operations']:
+                        op = normalize_operation_columns(op)
                         df, _, _ = execute_operation(op, df)
                     # Apply current operation
                     df, result, extra_data = execute_operation(operation, df)
@@ -450,7 +515,9 @@ def index():
                 session['chat_history'].append({"role": "bot", "content": message})
 
     # Always provide the latest CSV or chart if they exist
-    if os.path.exists(os.path.join(app.config['UPLOAD_FOLDER'], "output.csv")):
+    session_dir = get_session_upload_dir()
+    output_file_path = os.path.join(session_dir, "output.csv")
+    if os.path.exists(output_file_path):
         csv_file = "output.csv"
 
     return render_template(
@@ -466,12 +533,14 @@ def index():
 @app.route('/Uploads/<filename>')
 def serve_uploaded_file(filename):
     print(f"Attempting to serve file: {filename}")
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+    session_dir = get_session_upload_dir()
+    return send_from_directory(session_dir, filename)
 
 @app.route("/download/<filename>")
 def download_file(filename):
     print(f"Downloading file: {filename}")
-    return send_file(os.path.join(app.config['UPLOAD_FOLDER'], filename), as_attachment=True)
+    session_dir = get_session_upload_dir()
+    return send_file(os.path.join(session_dir, filename), as_attachment=True)
 
 @app.route("/clear", methods=["POST"])
 def clear_session():
@@ -479,6 +548,26 @@ def clear_session():
     for file in os.listdir(app.config['UPLOAD_FOLDER']):
         os.remove(os.path.join(app.config['UPLOAD_FOLDER'], file))
     return jsonify({"status": "Session cleared"})
+
+@app.route("/test-matplotlib")
+def test_matplotlib():
+    try:
+        plt.figure(figsize=(8, 6))
+        plt.plot([1, 2, 3], [4, 5, 6])
+        session_dir = get_session_upload_dir()
+        chart_path = os.path.join(session_dir, "test.png")
+        plt.savefig(chart_path)
+        plt.close()
+        if os.path.exists(chart_path):
+            with open(chart_path, "rb") as image_file:
+                base64_image = base64.b64encode(image_file.read()).decode('utf-8')
+            base64_string = f"data:image/png;base64,{base64_image}"
+            return render_template("index.html", base64_image=base64_string, chat_history=[{"role": "bot", "content": "Test chart generated."}])
+        else:
+            return "Failed to save test chart.", 500
+    except Exception as e:
+        print(f"Matplotlib test error: {str(e)}")
+        return f"Matplotlib test error: {str(e)}", 500
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
