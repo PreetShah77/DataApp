@@ -13,13 +13,6 @@ from charset_normalizer import detect
 from flask_session import Session
 from io import StringIO
 import base64
-from dotenv import load_dotenv
-
-# Load environment variables from .env file
-load_dotenv()
-
-# Get the API key securely
-api_key = os.getenv("OPENAI_API_KEY")
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -31,7 +24,7 @@ Session(app)
 
 # Initialize LLaMA API client
 client = openai.OpenAI(
-    api_key=api_key,
+    api_key="sk-XwJbTlOeKsDhf_V2XI18PA",
     base_url="https://chatapi.akash.network/api/v1"
 )
 
@@ -473,4 +466,6 @@ def clear_session():
     return jsonify({"status": "Session cleared"})
 
 if __name__ == "__main__":
-    app.run(debug=True,port=5069)
+    # Bind to the port provided by Render (or default to 5000 for local testing)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=False)
