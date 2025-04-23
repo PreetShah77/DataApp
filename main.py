@@ -1,7 +1,7 @@
 import openai
 import pandas as pd
 import matplotlib
-matplotlib.use('Agg')  # Set non-GUI backend for Matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from flask import Flask, request, render_template, send_file, session, jsonify, send_from_directory
 import os
@@ -24,8 +24,8 @@ Session(app)
 
 # Initialize LLaMA API client
 client = openai.OpenAI(
-    api_key="sk-XwJbTlOeKsDhf_V2XI18PA",
-    base_url="https://chatapi.akash.network/api/v1"
+    api_key=os.environ.get("OPENAI_API_KEY", "sk-XwJbTlOeKsDhf_V2XI18PA"),
+    base_url=os.environ.get("OPENAI_BASE_URL", "https://chatapi.akash.network/api/v1")
 )
 
 # Function to detect file encoding for CSV
@@ -86,8 +86,9 @@ def interpret_prompt(prompt, df_columns):
                         "- Export: save as CSV.\n"
                         f"Columns: {df_columns}\n"
                         "Rules:\n"
-                        "- If 'product' is mentioned, assume 'PRODUCTCODE' unless 'PRODUCTLINE' is explicitly stated.\n"
-                        "- For 'group by X' or 'by grouping X', default to aggregating numeric columns (e.g., SALES, QUANTITYORDERED) with 'sum'.\n"
+                        "- All column names in the DataFrame are normalized to lowercase with spaces replaced by underscores (e.g., 'STATE' becomes 'state', 'PRODUCTLINE' becomes 'product_line'). Match user input case-insensitively to these normalized names.\n"
+                        "- If 'product' is mentioned, assume 'productcode' unless 'productline' is explicitly stated.\n"
+                        "- For 'group by X' or 'by grouping X', default to aggregating numeric columns (e.g., sales, quantityordered) with 'sum'.\n"
                         "- For 'which is the X with highest Y', use 'transform' with 'find_max', grouping by X and aggregating Y with 'sum', then sorting descending.\n"
                         "- For 'convert all columns names to snake case', use 'clean' with 'rename_columns' and provide a list of original_name/new_name pairs where new_name is the snake_case version.\n"
                         "- For 'rename X column to Y', use 'clean' with 'rename_columns' and match X case-insensitively against the current column names, replacing spaces with underscores.\n"
@@ -95,24 +96,25 @@ def interpret_prompt(prompt, df_columns):
                         "- Use ONLY pandas string methods (e.g., str.replace, str[-n:]) prefixed with the column name (e.g., 'phone.str.replace'), NO external functions.\n"
                         "- For 'provide insights' or similar, use 'suggest_analysis' to propose analyses based on available columns.\n"
                         "- For 'retrieve the first row' or similar, use 'retrieve_row' with 'row_index' set to 0.\n"
-                        "- For chart requests like 'give me [chart_type] chart for X vs Y by grouping Z', use 'visualize' with 'chart_type' (e.g., 'donut', 'bar', 'pie', 'line'), 'x_column' (e.g., X), 'y_column' (e.g., Y), 'group_by' (e.g., Z), and 'aggregate' (default to 'sum').\n"
+                        "- For chart requests like 'give me [chart_type] chart for X vs Y by grouping Z', use 'visualize' with 'chart_type' (e.g., 'donut', 'bar', 'pie', 'line'), 'x_column' (e.g., X), 'y_column' (e.g., Y), 'group_by' (e.g., Z), and 'aggregate' (default to 'sum'). Match X, Y, Z case-insensitively to normalized column names.\n"
                         "Examples:\n"
-                        "- 'Fill null values in STATE with Guj': {\"operation\": \"clean\", \"type\": \"fill_null\", \"column\": \"STATE\", \"value\": \"Guj\"}\n"
-                        "- 'Remove productline column': {\"operation\": \"clean\", \"type\": \"remove_column\", \"column\": \"PRODUCTLINE\"}\n"
-                        "- 'Convert all columns names to snake case': {\"operation\": \"clean\", \"type\": \"rename_columns\", \"columns\": [{\"original_name\": \"ORDERNUMBER\", \"new_name\": \"order_number\"}, {\"original_name\": \"SALES\", \"new_name\": \"sales\"}]}\n"
+                        "- 'Fill null values in STATE with Guj': {\"operation\": \"clean\", \"type\": \"fill_null\", \"column\": \"state\", \"value\": \"Guj\"}\n"
+                        "- 'Remove productline column': {\"operation\": \"clean\", \"type\": \"remove_column\", \"column\": \"product_line\"}\n"
+                        "- 'Convert all columns names to snake case': {\"operation\": \"clean\", \"type\": \"rename_columns\", \"columns\": [{\"original_name\": \"ordernumber\", \"new_name\": \"order_number\"}, {\"original_name\": \"sales\", \"new_name\": \"sales\"}]}\n"
                         "- 'Rename productline column to products': {\"operation\": \"clean\", \"type\": \"rename_columns\", \"columns\": [{\"original_name\": \"product_line\", \"new_name\": \"products\"}]}\n"
-                        "- 'Remove - from phone': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"PHONE\", \"expression\": \"phone.str.replace('-', '')\"}\n"
-                        "- 'Transform the phone number and convert it to only 10 digits': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"PHONE\", \"expression\": \"phone.str.replace('[^0-9]', '', regex=True).str[-10:]\"}\n"
+                        "- 'Remove - from phone': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"phone\", \"expression\": \"phone.str.replace('-', '')\"}\n"
+                        "- 'Transform the phone number and convert it to only 10 digits': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"phone\", \"expression\": \"phone.str.replace('[^0-9]', '', regex=True).str[-10:]\"}\n"
                         "- 'Provide me some important insights from this data': {\"operation\": \"suggest_analysis\"}\n"
                         "- 'Retrieve the first row of the dataframe': {\"operation\": \"retrieve_row\", \"row_index\": 0}\n"
-                        "- 'Give me donut chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"donut\", \"x_column\": \"STATE\", \"y_column\": \"SALES\", \"group_by\": \"STATE\", \"aggregate\": \"sum\"}\n"
-                        "- 'Give me bar chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"bar\", \"x_column\": \"STATE\", \"y_column\": \"SALES\", \"group_by\": \"STATE\", \"aggregate\": \"sum\"}\n"
-                        "- 'Give me pie chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"pie\", \"x_column\": \"STATE\", \"y_column\": \"SALES\", \"group_by\": \"STATE\", \"aggregate\": \"sum\"}\n"
-                        "- 'Give me line chart for sales vs year_id by grouping year_id column': {\"operation\": \"visualize\", \"chart_type\": \"line\", \"x_column\": \"YEAR_ID\", \"y_column\": \"SALES\", \"group_by\": \"YEAR_ID\", \"aggregate\": \"sum\"}\n"
-                        "- 'Which is the state with highest sale': {\"operation\": \"transform\", \"type\": \"find_max\", \"group_by\": \"STATE\", \"aggregate_column\": \"SALES\", \"aggregate\": \"sum\", \"limit\": 1}\n"
+                        "- 'Give me donut chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"donut\", \"x_column\": \"state\", \"y_column\": \"sales\", \"group_by\": \"state\", \"aggregate\": \"sum\"}\n"
+                        "- 'Give me bar chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"bar\", \"x_column\": \"state\", \"y_column\": \"sales\", \"group_by\": \"state\", \"aggregate\": \"sum\"}\n"
+                        "- 'Give me bar chart for product vs country': {\"operation\": \"visualize\", \"chart_type\": \"bar\", \"x_column\": \"country\", \"y_column\": \"productcode\", \"group_by\": \"country\", \"aggregate\": \"count\"}\n"
+                        "- 'Give me pie chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"pie\", \"x_column\": \"state\", \"y_column\": \"sales\", \"group_by\": \"state\", \"aggregate\": \"sum\"}\n"
+                        "- 'Give me line chart for sales vs year_id by grouping year_id column': {\"operation\": \"visualize\", \"chart_type\": \"line\", \"x_column\": \"year_id\", \"y_column\": \"sales\", \"group_by\": \"year_id\", \"aggregate\": \"sum\"}\n"
+                        "- 'Which is the state with highest sale': {\"operation\": \"transform\", \"type\": \"find_max\", \"group_by\": \"state\", \"aggregate_column\": \"sales\", \"aggregate\": \"sum\", \"limit\": 1}\n"
                         "- 'Describe all columns and their datatypes': {\"operation\": \"describe_columns\"}\n"
                         "- 'How many records are there': {\"operation\": \"count_records\"}\n"
-                        "- 'Group by COUNTRY': {\"operation\": \"transform\", \"type\": \"group\", \"column\": \"COUNTRY\", \"aggregate_column\": \"SALES\", \"aggregate\": \"sum\"}\n"
+                        "- 'Group by COUNTRY': {\"operation\": \"transform\", \"type\": \"group\", \"column\": \"country\", \"aggregate_column\": \"sales\", \"aggregate\": \"sum\"}\n"
                         "If the prompt is unclear, columns are invalid, or an unsupported function is suggested, return: {\"error\": \"Unclear prompt, invalid columns, or unsupported function. Use pandas string methods prefixed with column name. Try: Remove X column, Describe columns.\"}"
                     )
                 },
@@ -126,43 +128,53 @@ def interpret_prompt(prompt, df_columns):
             try:
                 print(f"Extracted JSON string: {json_str}, type: {type(json_str)}")
                 parsed_json = json.loads(json_str)
+                # Validate columns using normalized names
                 if "column" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["column"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['column']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['column']}' not found. Available columns: {df_columns}"}
+                    parsed_json["column"] = normalized_col  # Use normalized name
                 if "x_axis" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["x_axis"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['x_axis']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['x_axis']}' not found. Available columns: {df_columns}"}
+                    parsed_json["x_axis"] = normalized_col
                 if "y_axis" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["y_axis"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['y_axis']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['y_axis']}' not found. Available columns: {df_columns}"}
+                    parsed_json["y_axis"] = normalized_col
                 if "aggregate_column" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["aggregate_column"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['aggregate_column']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['aggregate_column']}' not found. Available columns: {df_columns}"}
+                    parsed_json["aggregate_column"] = normalized_col
                 if "group_by" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["group_by"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['group_by']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['group_by']}' not found. Available columns: {df_columns}"}
+                    parsed_json["group_by"] = normalized_col
                 if "field" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["field"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['field']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['field']}' not found. Available columns: {df_columns}"}
+                    parsed_json["field"] = normalized_col
                 if "columns" in parsed_json:
                     for col in parsed_json["columns"]:
                         normalized_col = normalize_column_name(col["original_name"])
                         if normalized_col not in normalized_df_columns:
-                            return {"error": f"Column {col['original_name']} not in {df_columns}"}
+                            return {"error": f"Column '{col['original_name']}' not found. Available columns: {df_columns}"}
+                        col["original_name"] = normalized_col
                 if "x_column" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["x_column"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['x_column']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['x_column']}' not found. Available columns: {df_columns}"}
+                    parsed_json["x_column"] = normalized_col
                 if "y_column" in parsed_json:
                     normalized_col = normalize_column_name(parsed_json["y_column"])
                     if normalized_col not in normalized_df_columns:
-                        return {"error": f"Column {parsed_json['y_column']} not in {df_columns}"}
+                        return {"error": f"Column '{parsed_json['y_column']}' not found. Available columns: {df_columns}"}
+                    parsed_json["y_column"] = normalized_col
                 return parsed_json
             except json.JSONDecodeError as e:
                 return {"error": f"Failed to parse JSON: {json_str}, error: {str(e)}"}
@@ -253,13 +265,13 @@ def execute_operation(operation, df):
 
         elif operation["operation"] == "suggest_analysis":
             suggestions = [
-                "Group SALES by COUNTRY and compute the sum.",
-                "Remove rows with null STATE.",
-                "Fill nulls in STATE with 'Unknown'.",
+                "Group sales by country and compute the sum.",
+                "Remove rows with null state.",
+                "Fill nulls in state with 'Unknown'.",
                 "Describe all columns and their data types.",
                 "Count the total number of records.",
                 "Which is the state with highest sale.",
-                "Filter rows where SALES > 5000."
+                "Filter rows where sales > 5000."
             ]
             return df, f"Possible analyses:\n" + "\n".join(suggestions), None
 
@@ -387,10 +399,13 @@ def index():
                                     continue
                             else:
                                 raise ValueError("Unable to decode CSV with common encodings.")
-                        message = f"File {filename} uploaded (encoding: {encoding}). Columns: {list(df.columns)}"
+                        message = f"File {filename} uploaded (encoding: {encoding})."
                     else:
                         df = pd.read_excel(file_path, engine='openpyxl')
-                        message = f"File {filename} uploaded. Columns: {list(df.columns)}"
+                        message = f"File {filename} uploaded."
+                    # Normalize column names in the DataFrame
+                    df.columns = [normalize_column_name(col) for col in df.columns]
+                    message += f" Columns: {list(df.columns)}"
                     session['df'] = df.to_json()
                     session['filename'] = filename
                     session['operations'] = []
@@ -466,6 +481,5 @@ def clear_session():
     return jsonify({"status": "Session cleared"})
 
 if __name__ == "__main__":
-    # Bind to the port provided by Render (or default to 5000 for local testing)
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
