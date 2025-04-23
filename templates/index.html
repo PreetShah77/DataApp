@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Data Analysis Chatbot</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #e0e0e0; }
+        .chat-container { max-width: 900px; margin: 20px auto; }
+        .chat-box { max-height: 500px; overflow-y: auto; border: 1px solid #ddd; padding: 15px; background: white; border-radius: 10px; }
+        .user-message { background: #d1e7dd; padding: 10px; margin: 5px 0; border-radius: 8px; }
+        .bot-message { background: #f8d7da; padding: 10px; margin: 5px 0; border-radius: 8px; }
+        .graph-container { margin-top: 20px; background: white; padding: 15px; border-radius: 10px; overflow: auto; }
+        .download-btn { margin: 10px 5px; }
+        .status-bar { margin-bottom: 15px; }
+        .chart-img { max-width: 100%; height: auto; display: block; }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h1 class="text-center mb-4">Data Analysis Chatbot</h1>
+        <div class="status-bar">
+            {% if filename %}
+                <p class="text-success"><strong>File loaded:</strong> {{ filename }} | 
+                <a href="/download/{{ filename }}" class="btn btn-sm btn-outline-primary">Download Original</a></p>
+            {% else %}
+                <p class="text-muted"><strong>No file loaded.</strong> Upload a CSV or Excel file to start.</p>
+            {% endif %}
+        </div>
+        <form method="post" enctype="multipart/form-data" class="mb-3">
+            <div class="mb-3">
+                <label for="file" class="form-label">Upload CSV/Excel file (optional if file is loaded):</label>
+                <input type="file" class="form-control" name="file" accept=".csv,.xlsx">
+            </div>
+            <div class="mb-3">
+                <label for="prompt" class="form-label">Enter your prompt (e.g., "Fill nulls in STATE with Guj", "Give me bar chart for SALES vs STATE by grouping STATE column"):</label>
+                <input type="text" class="form-control" name="prompt" placeholder="Type your data analysis request">
+            </div>
+            <button type="submit" class="btn btn-primary">Submit</button>
+            <button type="button" class="btn btn-danger" onclick="clearSession()">Clear Session</button>
+        </form>
+
+        <div class="chat-box">
+            {% if not chat_history %}
+                <p class="text-muted">Start by uploading a file or entering a prompt. Examples:
+                    <ul>
+                        <li>Fill nulls in STATE with Guj</li>
+                        <li>Remove productline column</li>
+                        <li>Give me donut chart for SALES vs STATE by grouping STATE column</li>
+                        <li>Give me bar chart for SALES vs STATE by grouping STATE column</li>
+                        <li>Give me pie chart for SALES vs STATE by grouping STATE column</li>
+                        <li>Give me line chart for SALES vs YEAR_ID by grouping YEAR_ID column</li>
+                        <li>Describe all columns and their datatypes</li>
+                        <li>How many records are there</li>
+                        <li>Group by COUNTRY</li>
+                        <li>Give me analysis you can do</li>
+                        <li>Export as CSV</li>
+                    </ul>
+                </p>
+            {% endif %}
+            {% for msg in chat_history %}
+                <div class="{{ 'user-message' if msg.role == 'user' else 'bot-message' }}">
+                    <strong>{{ 'You' if msg.role == 'user' else 'Bot' }}:</strong> {{ msg.content }}
+                </div>
+            {% endfor %}
+        </div>
+
+        {% if chart_file %}
+            <div class="graph-container">
+                {% if base64_image %}
+                    <img src="{{ base64_image }}" class="chart-img" alt="Chart" onload="console.log('Chart loaded via base64')" onerror="this.onerror=null; this.src='/Uploads/{{ chart_file }}?{{ range(1000000) | random }}'; console.log('Failed to load base64 chart, falling back to /Uploads/{{ chart_file }}');">
+                {% else %}
+                    <img src="/Uploads/{{ chart_file }}?{{ range(1000000) | random }}" class="chart-img" alt="Chart" onload="console.log('Chart loaded from /Uploads/{{ chart_file }}')" onerror="console.log('Failed to load chart image at /Uploads/{{ chart_file }}');">
+                {% endif %}
+                <br>
+                <a href="/download/{{ chart_file }}" class="btn btn-success download-btn">Download Chart (PNG)</a>
+            </div>
+        {% endif %}
+        {% if csv_file %}
+            <a href="/download/{{ csv_file }}" class="btn btn-success download-btn">Download Updated CSV</a>
+        {% endif %}
+    </div>
+
+    <script>
+        function clearSession() {
+            fetch('/clear', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.status === 'Session cleared') {
+                        window.location.href = '/';
+                    }
+                })
+                .catch(error => {
+                    console.error('Error clearing session:', error);
+                    alert('Failed to clear session. Please try again.');
+                });
+        }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
