@@ -473,4 +473,4 @@ def clear_session():
     return jsonify({"status": "Session cleared"})
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(debug=True,port=5069)
