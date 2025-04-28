@@ -159,7 +159,7 @@ def interpret_prompt(prompt, df_columns):
                         "return a valid JSON object with the operation type (clean, transform, summarize, export, describe_columns, count_records, suggest_analysis, retrieve_row, visualize) "
                         "and parameters needed to execute it. The response MUST be pure JSON, with no additional text, "
                         "Markdown, or explanations. Supported operations:\n"
-                        "- Clean: remove duplicates, drop nulls, standardize formats, remove columns, fill nulls, rename_columns (rename columns based on a list of original_name/new_name pairs).\n"
+                        "- Clean: remove duplicates, drop nulls, standardize_format, remove columns, fill nulls, rename_columns (rename columns based on a list of original_name/new_name pairs).\n"
                         "- Transform: filter, group, calculate, pivot, find_max (group by column and find max aggregated value), calculate (use pandas string methods like str.replace, str[-n:] for string manipulations).\n"
                         "- Summarize: describe data numerically.\n"
                         "- Describe_columns: list column names and data types.\n"
@@ -177,10 +177,12 @@ def interpret_prompt(prompt, df_columns):
                         "- For 'convert all columns names to snake case', use 'clean' with 'rename_columns' and provide a list of original_name/new_name pairs for ALL columns, ensuring they are already in snake_case (e.g., 'quantity_ordered' to 'quantity_ordered'). Since columns are already in snake_case, this may be a no-op.\n"
                         "- For 'rename X column to Y', use 'clean' with 'rename_columns' and match X case-insensitively against the current column names, which are in snake_case.\n"
                         "- For phone number transformations (e.g., 'convert to 10 digits', 'remove X from Y'), use 'transform' with 'calculate' and pandas string methods: str.replace to remove characters (e.g., str.replace('-', '')), str[-n:] to extract substrings, and format with ' - ' as needed (e.g., XXX-XXX-XXXX). Infer user intent flexibly.\n"
-                        "- Use ONLY pandas string methods (e.g., str.replace, str[-n:]) prefixed with the column name (e.g., 'phone.str.replace'), NO external functions.\n"
+                        "- Use ONLY pandas string methods (e.g., str.replace, str[-n:]) prefixed with the column name (e.g., 'phone.str.replace'), NO external functions like np.where, np.select, or lambda.\n"
+                        "- For conditional replacements like 'where X is Y replace with Z' in a column, use 'transform' with 'calculate' and pandas string methods, e.g., str.replace('Y', 'Z') for exact matches, ensuring the column is treated as a string.\n"
                         "- For 'provide insights' or similar, use 'suggest_analysis' to propose analyses based on available columns.\n"
                         "- For 'retrieve the first row' or similar, use 'retrieve_row' with 'row_index' set to 0.\n"
                         "- For chart requests like 'give me [chart_type] chart for X vs Y by grouping Z', use 'visualize' with 'chart_type' (e.g., 'donut', 'bar', 'pie', 'line'), 'x_column' (e.g., X), 'y_column' (e.g., Y), 'group_by' (e.g., Z), and 'aggregate' (default to 'sum'). Match X, Y, Z case-insensitively to normalized column names.\n"
+                        "- For 'standardize the date format' or similar, use 'clean' with 'standardize_format', and include 'format': 'date' to specify the YYYY-MM-DD format.\n"
                         "Examples:\n"
                         "- 'Fill null values in STATE with Guj': {\"operation\": \"clean\", \"type\": \"fill_null\", \"column\": \"state\", \"value\": \"Guj\"}\n"
                         "- 'Remove productline column': {\"operation\": \"clean\", \"type\": \"remove_column\", \"column\": \"product_line\"}\n"
@@ -189,8 +191,10 @@ def interpret_prompt(prompt, df_columns):
                         "- 'Rename productline column to products': {\"operation\": \"clean\", \"type\": \"rename_columns\", \"columns\": [{\"original_name\": \"product_line\", \"new_name\": \"products\"}]}\n"
                         "- 'Remove - from phone': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"phone\", \"expression\": \"phone.str.replace('-', '')\"}\n"
                         "- 'Transform the phone number and convert it to only 10 digits': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"phone\", \"expression\": \"phone.str.replace('[^0-9]', '', regex=True).str[-10:]\"}\n"
+                        "- 'In state column where there is Guj change with Ahm': {\"operation\": \"transform\", \"type\": \"calculate\", \"field\": \"state\", \"expression\": \"state.str.replace('Guj', 'Ahm')\"}\n"
                         "- 'Provide me some important insights from this data': {\"operation\": \"suggest_analysis\"}\n"
                         "- 'Retrieve the first row of the dataframe': {\"operation\": \"retrieve_row\", \"row_index\": 0}\n"
+                        "- 'Retrieve the last row of the dataframe': {\"operation\": \"retrieve_row\", \"row_index\": -1}\n"
                         "- 'Give me donut chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"donut\", \"x_column\": \"state\", \"y_column\": \"sales\", \"group_by\": \"state\", \"aggregate\": \"sum\"}\n"
                         "- 'Give me bar chart for sales vs state by grouping state column': {\"operation\": \"visualize\", \"chart_type\": \"bar\", \"x_column\": \"state\", \"y_column\": \"sales\", \"group_by\": \"state\", \"aggregate\": \"sum\"}\n"
                         "- 'Give me bar chart for product vs country': {\"operation\": \"visualize\", \"chart_type\": \"bar\", \"x_column\": \"country\", \"y_column\": \"product_code\", \"group_by\": \"country\", \"aggregate\": \"count\"}\n"
@@ -200,7 +204,8 @@ def interpret_prompt(prompt, df_columns):
                         "- 'Describe all columns and their datatypes': {\"operation\": \"describe_columns\"}\n"
                         "- 'How many records are there': {\"operation\": \"count_records\"}\n"
                         "- 'Group by COUNTRY': {\"operation\": \"transform\", \"type\": \"group\", \"column\": \"country\", \"aggregate_column\": \"sales\", \"aggregate\": \"sum\"}\n"
-                        "- 'Give me pivot table with state, city and aggregated sales': {\"operation\": \"transform\", \"type\": \"pivot\", \"group_by\": [\"state\", \"city\"], \"values\": [\"sales\"]}'\n"
+                        "- 'Give me pivot table with state, city and aggregated sales': {\"operation\": \"transform\", \"type\": \"pivot\", \"group_by\": [\"state\", \"city\"], \"values\": [\"sales\"]}\n"
+                        "- 'Standardize the date format': {\"operation\": \"clean\", \"type\": \"standardize_format\", \"column\": \"date\", \"format\": \"date\"}\n"
                         "If the prompt is unclear, columns are invalid, or an unsupported function is suggested, return: {\"error\": \"Unclear prompt, invalid columns, or unsupported function. Use pandas string methods prefixed with column name. Try: Remove X column, Describe columns.\"}"
                     )
                 },
@@ -214,7 +219,11 @@ def interpret_prompt(prompt, df_columns):
             try:
                 print(f"Extracted JSON string: {json_str}, type: {type(json_str)}")
                 parsed_json = json.loads(json_str)
-                # Remove early column validation to allow similarity checks in execute_operation
+                # Post-process to correct 'standardize_formats' to 'standardize_format' and add 'format' if missing
+                if parsed_json.get("type") == "standardize_formats":
+                    parsed_json["type"] = "standardize_format"
+                if parsed_json.get("type") == "standardize_format" and "format" not in parsed_json:
+                    parsed_json["format"] = "date"  # Default to date format if not specified
                 return parsed_json
             except json.JSONDecodeError as e:
                 return {"error": f"Failed to parse JSON: {json_str}, error: {str(e)}"}
@@ -222,7 +231,7 @@ def interpret_prompt(prompt, df_columns):
     except Exception as e:
         print(f"API query exception: {str(e)}")
         return {"error": f"Failed to query API: {str(e)}"}
-
+        
 # Function to execute data operations
 def execute_operation(operation, df, original_df):
     try:
@@ -334,9 +343,11 @@ def execute_operation(operation, df, original_df):
                 df = df.drop_duplicates()
                 return df, "Removed duplicates.", save_updated_csv(df)
             elif operation["type"] == "standardize_format":
-                if operation["format"] == "date":
-                    df[operation["column"]] = pd.to_datetime(df[operation["column"]]).dt.strftime("%Y-%m-%d")
-                    return df, f"Standardized date format in {operation['column']}.", save_updated_csv(df)
+                if operation.get("format") == "date":
+                    df[operation["column"]] = pd.to_datetime(df[operation["column"]], errors='coerce').dt.strftime("%Y-%m-%d")
+                    return df, f"Standardized date format in {operation['column']} to YYYY-MM-DD.", save_updated_csv(df)
+                else:
+                    return df, f"Unsupported format '{operation.get('format', 'default')}'. Use 'date' for standardization.", None
             elif operation["type"] == "remove_column":
                 target_column = operation["column"]
                 df = df.drop(columns=[target_column])
@@ -367,15 +378,34 @@ def execute_operation(operation, df, original_df):
                 expr = operation["expression"]
                 print(f"Evaluating expression: {expr}")
                 print(f"Condition check - 'str' in expr: {'str' in expr}, 'replace' in expr: {'replace' in expr}")
-                if "str" in expr and "replace" in expr:
-                    print(f"Applying string transformation to {field}")
-                    df[field] = df[field].astype(str)
-                    try:
-                        exec_expr = expr.replace(f"{field}.", f"df['{field}'].")
-                        exec(exec_expr)
-                        return df, f"Transformed {field} with expression: {expr}.", save_updated_csv(df)
-                    except Exception as e:
-                        return df, f"Error applying transformation: {str(e)}. Ensure valid pandas string methods.", None
+                if "str" in expr:
+                    if "replace" in expr:
+                        print(f"Applying string transformation to {field}")
+                        # Log unique values before transformation
+                        print(f"Unique values in {field} before transformation: {df[field].astype(str).unique()}")
+                        # Convert to string, strip whitespace, and make replacement case-insensitive
+                        df[field] = df[field].astype(str).str.strip()
+                        try:
+                            # Extract the old and new values from the expression for logging
+                            import re
+                            match = re.search(r"str\.replace\('([^']+)',\s*'([^']+)'\)", expr)
+                            if match:
+                                old_value, new_value = match.groups()
+                                # Perform case-insensitive replacement
+                                df[field] = df[field].str.replace(old_value, new_value, case=False)
+                                # Log unique values after transformation
+                                print(f"Unique values in {field} after transformation: {df[field].unique()}")
+                                # Check if any replacements were made
+                                if (df[field] == new_value).any():
+                                    return df, f"Transformed {field} with expression: {expr}. Replaced '{old_value}' with '{new_value}'.", save_updated_csv(df)
+                                else:
+                                    return df, f"Transformed {field} with expression: {expr}. Replaced '{old_value}' with '{new_value}'.", save_updated_csv(df)
+                            else:
+                                return df, f"Could not parse replacement values from expression: {expr}.", None
+                        except Exception as e:
+                            return df, f"Error applying transformation: {str(e)}. Ensure valid pandas string methods.", None
+                    else:
+                        return df, f"Unsupported string method in expression '{expr}'. Use pandas string methods like str.replace, str[-n:].", None
                 else:
                     return df, f"Invalid expression '{expr}'. Use pandas string methods (e.g., str.replace, str[-n:]) prefixed with column name. Try a different prompt.", None
             elif operation["type"] == "find_max":
@@ -426,7 +456,7 @@ def execute_operation(operation, df, original_df):
                 if len(df) > row_index:
                     row = df.iloc[row_index].to_dict()
                     row_str = "\n".join([f"{col}: {val}" for col, val in row.items()])
-                    return df, f"First row:\n{row_str}", None
+                    return df, f"Row:\n{row_str}", None
                 else:
                     return df, "DataFrame is empty or row index out of range.", None
             return df, "Row index not specified.", None
@@ -448,13 +478,11 @@ def execute_operation(operation, df, original_df):
                 print(f"Grouped data for chart:\n{grouped_df}")
                 if grouped_df.empty or len(grouped_df) == 0:
                     return df, f"No data to plot after grouping by {group_by}.", None
-
                 plt.figure(figsize=(8, 6))
                 chart_type = operation["chart_type"].lower()
                 chart_filename = f"{chart_type}_chart.png"
                 session_dir = get_session_upload_dir()
                 chart_path = os.path.join(session_dir, chart_filename)
-
                 try:
                     if chart_type == "donut":
                         plt.pie(grouped_df[y_col], labels=grouped_df[x_col], autopct='%1.1f%%')
@@ -505,7 +533,6 @@ def execute_operation(operation, df, original_df):
         print(f"Error in execute_operation: {str(e)}")
         return df, f"Error executing operation: {str(e)}. Try a different prompt.", None
 
-# Flask routes
 @app.route("/", methods=["GET", "POST"])
 def index():
     if 'chat_history' not in session:
