@@ -478,7 +478,7 @@ def execute_operation(operation, df, original_df):
                 print(f"Grouped data for chart:\n{grouped_df}")
                 if grouped_df.empty or len(grouped_df) == 0:
                     return df, f"No data to plot after grouping by {group_by}.", None
-                plt.figure(figsize=(8, 6))
+                plt.figure(figsize=(8, 8))
                 chart_type = operation["chart_type"].lower()
                 chart_filename = f"{chart_type}_chart.png"
                 session_dir = get_session_upload_dir()
