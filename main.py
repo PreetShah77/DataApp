@@ -26,7 +26,7 @@ Session(app)
 
 # Initialize LLaMA API client
 client = openai.OpenAI(
-    api_key=os.environ.get("OPENAI_API_KEY", "sk-XwJbTlOeKsDhf_V2XI18PA"),
+    api_key=os.environ.get("OPENAI_API_KEY", "sk-zW4oH1dx4ThV4P_R3uo8kA"),
     base_url=os.environ.get("OPENAI_BASE_URL", "https://chatapi.akash.network/api/v1")
 )
 
@@ -706,3 +706,4 @@ def test_matplotlib():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
